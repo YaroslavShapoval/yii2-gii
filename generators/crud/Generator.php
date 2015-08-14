@@ -95,6 +95,19 @@ class Generator extends \yii\gii\Generator
     }
 
     /**
+     * List of correspondence between form fields type and validator classes.
+     * @return array
+     */
+    public static function typeValidators()
+    {
+        return [
+            'number' => 'yii\validators\NumberValidator',
+            'url' => 'yii\validators\UrlValidator',
+            'email' => 'yii\validators\EmailValidator',
+        ];
+    }
+
+    /**
      * @inheritdoc
      */
     public function hints()
@@ -221,6 +234,9 @@ class Generator extends \yii\gii\Generator
      */
     public function generateActiveField($attribute)
     {
+        /* @var \yii\base\Model $model */
+        $model = new $this->modelClass();
+
         $tableSchema = $this->getTableSchema();
         if ($tableSchema === false || !isset($tableSchema->columns[$attribute])) {
             if (preg_match('/^(password|pass|passwd|passcode)$/i', $attribute)) {
@@ -235,11 +251,19 @@ class Generator extends \yii\gii\Generator
         } elseif ($column->type === 'text') {
             return "\$form->field(\$model, '$attribute')->textarea(['rows' => 6])";
         } else {
+            $inputType = '';
+            $fieldParams = [];
+
             if (preg_match('/^(password|pass|passwd|passcode)$/i', $column->name)) {
                 $input = 'passwordInput';
+            } elseif(($fieldParams = $this->findAttributeType($model->getActiveValidators($attribute))) !== []) {
+                $input = 'input';
+                $inputType = $fieldParams['type'];
+                unset($fieldParams['type']);
             } else {
                 $input = 'textInput';
             }
+
             if (is_array($column->enumValues) && count($column->enumValues) > 0) {
                 $dropDownOptions = [];
                 foreach ($column->enumValues as $enumValue) {
@@ -247,12 +271,40 @@ class Generator extends \yii\gii\Generator
                 }
                 return "\$form->field(\$model, '$attribute')->dropDownList("
                     . preg_replace("/\n\s*/", ' ', VarDumper::export($dropDownOptions)).", ['prompt' => ''])";
-            } elseif ($column->phpType !== 'string' || $column->size === null) {
-                return "\$form->field(\$model, '$attribute')->$input()";
             } else {
-                return "\$form->field(\$model, '$attribute')->$input(['maxlength' => true])";
+                if ($column->phpType === 'string' && $column->size !== null) $fieldParams['maxlength'] = true;
+                $inputMethodParams = [];
+                if(!empty($inputType)) $inputMethodParams[] = VarDumper::export($inputType);
+                if(!empty($fieldParams)) $inputMethodParams[] = VarDumper::export($fieldParams);
+
+                return "\$form->field(\$model, '$attribute')->$input(".implode(', ', $inputMethodParams).")";
             }
         }
+    }
+
+    /**
+     * Detect field input type and parameters by list of attribute validators
+     * @param $attributeValidators
+     * @return array - parameters
+     */
+    public function findAttributeType($attributeValidators)
+    {
+        $params = [];
+        $typeValidatorList = self::typeValidators();
+
+        /** @var \yii\validators\Validator $validator */
+        foreach ($attributeValidators as $validator) {
+            if (($type = array_search($validator::className(), $typeValidatorList)) !== false) {
+                $params['type'] = $type;
+                if (isset($validator->min)) $params['min'] = $validator->min;
+                if (isset($validator->max)) $params['max'] = $validator->max;
+
+                // Return first detected input type
+                return $params;
+            }
+        }
+
+        return $params;
     }
 
     /**
